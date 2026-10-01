@@ -146,6 +146,26 @@ $("locate").addEventListener("click", () => {
     { enableHighAccuracy: true, timeout: 15000 });
 });
 
+// 混雑(429/5xx)や接続失敗のときは、別のサーバーに切り替えて再試行する
+const ENDPOINTS = [
+  "https://overpass-api.de/api/interpreter",
+  "https://overpass.private.coffee/api/interpreter",
+  "https://overpass.kumi.systems/api/interpreter",
+];
+async function queryOverpass(q) {
+  let lastErr;
+  for (const [i, url] of ENDPOINTS.entries()) {
+    if (i > 0) $("status").textContent = `混雑のため別のサーバーで再試行中...(${i}/${ENDPOINTS.length - 1})`;
+    try {
+      const res = await fetch(url, { method: "POST", body: "data=" + encodeURIComponent(q),
+        headers: { "Content-Type": "application/x-www-form-urlencoded" }, signal: AbortSignal.timeout(30000) });
+      if (res.ok) return await res.json();
+      lastErr = new Error(`HTTP ${res.status}`);
+    } catch (e) { lastErr = e; }
+  }
+  throw new Error(`${lastErr.message}(全サーバーが混雑中。少し待って再試行してください)`);
+}
+
 $("kw").addEventListener("keydown", e => { if (e.key === "Enter") $("search").click(); });
 $("search").addEventListener("click", async () => {
   if (!center) { $("status").className = "err"; $("status").textContent = "先に中心を決めてください"; return; }
@@ -153,15 +173,12 @@ $("search").addEventListener("click", async () => {
   $("status").className = ""; $("status").textContent = "検索中...";
   const { lat, lng } = center, r = Math.round(radiusM());
   const tag = TYPES[$("type").value];
-  const kw = $("kw").value.trim().replace(/[.*+?^${}()|[\]\\"]/g, ".");  // 正規表現の記号は任意の1文字に置換
+  const kw = $("kw").value.trim().replace(/駅$/, "").replace(/[.*+?^${}()|[\]\\"]/g, ".");  // 正規表現の記号は任意の1文字に置換
   if (!tag && !kw) { $("status").className = "err"; $("status").textContent = "種類かキーワードを指定してください"; btn.disabled = false; return; }
   const filter = (tag ? `[${tag}]` : "") + (kw ? `["name"~"${kw}",i]` : "");
   const q = `[out:json][timeout:25];nwr${filter}(around:${r},${lat},${lng});out center tags 200;`;
   try {
-    const res = await fetch("https://overpass-api.de/api/interpreter", { method: "POST", body: "data=" + encodeURIComponent(q),
-      headers: { "Content-Type": "application/x-www-form-urlencoded" } });
-    if (!res.ok) throw new Error(res.status === 429 ? "混雑しています。少し待って再試行してください" : `HTTP ${res.status}`);
-    const { elements } = await res.json();
+    const { elements } = await queryOverpass(q);
 
     const rows = elements.map(e => {
       const la = e.lat ?? e.center?.lat, lo = e.lon ?? e.center?.lon;
