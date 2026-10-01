@@ -49,6 +49,9 @@
       <input id="radius" type="range" min="0.1" max="20" step="0.1" value="1">
     </div>
     <div class="row">
+      <input id="kw" type="search" placeholder="キーワード(店名・施設名など。空欄なら種類のみ)">
+    </div>
+    <div class="row">
       <select id="type"></select>
       <button id="search">この円内を検索</button>
       <button id="locate">現在地へ</button>
@@ -80,6 +83,7 @@ const TYPES = {
   "駅": '"railway"="station"',
   "駐車場": '"amenity"="parking"',
   "ATM": '"amenity"="atm"',
+  "指定なし(キーワードのみ)": "",
 };
 $("type").innerHTML = Object.keys(TYPES).map(k => `<option>${k}</option>`).join("");
 
@@ -96,7 +100,7 @@ L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
   attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
 }).addTo(map);
 
-let center = null, centerMarker = null, circle = null;
+let center = null, centerIsGps = false, centerMarker = null, circle = null, line = null;
 const resultLayer = L.layerGroup().addTo(map);
 const radiusM = () => parseFloat($("radius").value) * 1000;
 
@@ -111,7 +115,7 @@ $("toggle").addEventListener("click", () => showList(!$("app").classList.contain
 
 function setCenter(latlng, fit = true) {
   center = latlng;
-  centerMarker?.remove(); circle?.remove();
+  centerMarker?.remove(); circle?.remove(); line?.remove();
   centerMarker = L.marker(latlng).addTo(map).bindTooltip("中心");
   circle = L.circle(latlng, { radius: radiusM(), color: "#1a73e8", fillOpacity: 0.08 }).addTo(map);
   resultLayer.clearLayers(); $("list").innerHTML = "";
@@ -124,13 +128,13 @@ $("radius").addEventListener("input", () => {
   if (circle) { circle.setRadius(radiusM()); map.fitBounds(circle.getBounds()); }
 });
 
-map.on("click", e => { setCenter(e.latlng, false); $("status").textContent = "地図上の地点を中心に設定しました"; });
+map.on("click", e => { setCenter(e.latlng, false); centerIsGps = false; $("status").textContent = "地図上の地点を中心に設定しました"; });
 
 $("locate").addEventListener("click", () => {
   $("status").className = ""; $("status").textContent = "現在地を取得中...";
   navigator.geolocation.getCurrentPosition(
     pos => {
-      setCenter(L.latLng(pos.coords.latitude, pos.coords.longitude));
+      setCenter(L.latLng(pos.coords.latitude, pos.coords.longitude)); centerIsGps = true;
       $("status").textContent = `現在地を取得しました(精度 ±${Math.round(pos.coords.accuracy)}m)`;
     },
     err => {
@@ -142,12 +146,17 @@ $("locate").addEventListener("click", () => {
     { enableHighAccuracy: true, timeout: 15000 });
 });
 
+$("kw").addEventListener("keydown", e => { if (e.key === "Enter") $("search").click(); });
 $("search").addEventListener("click", async () => {
   if (!center) { $("status").className = "err"; $("status").textContent = "先に中心を決めてください"; return; }
   const btn = $("search"); btn.disabled = true;
   $("status").className = ""; $("status").textContent = "検索中...";
   const { lat, lng } = center, r = Math.round(radiusM());
-  const q = `[out:json][timeout:25];nwr[${TYPES[$("type").value]}](around:${r},${lat},${lng});out center tags 200;`;
+  const tag = TYPES[$("type").value];
+  const kw = $("kw").value.trim().replace(/[.*+?^${}()|[\]\\"]/g, ".");  // 正規表現の記号は任意の1文字に置換
+  if (!tag && !kw) { $("status").className = "err"; $("status").textContent = "種類かキーワードを指定してください"; btn.disabled = false; return; }
+  const filter = (tag ? `[${tag}]` : "") + (kw ? `["name"~"${kw}",i]` : "");
+  const q = `[out:json][timeout:25];nwr${filter}(around:${r},${lat},${lng});out center tags 200;`;
   try {
     const res = await fetch("https://overpass-api.de/api/interpreter", { method: "POST", body: "data=" + encodeURIComponent(q),
       headers: { "Content-Type": "application/x-www-form-urlencoded" } });
@@ -159,20 +168,23 @@ $("search").addEventListener("click", async () => {
       return la == null ? null : { e, la, lo, d: haversine(lat, lng, la, lo) };
     }).filter(Boolean).sort((a, b) => a.d - b.d);
 
+    const from = centerIsGps ? "現在地" : "指定地点";
     resultLayer.clearLayers();
     const items = rows.map(({ e, la, lo, d }) => {
       const name = e.tags?.name || e.tags?.["name:ja"] || "(名称なし)";
       const m = L.circleMarker([la, lo], { radius: 6, color: "#d93025", fillOpacity: .8 })
-        .bindPopup(`<b>${esc(name)}</b><br>${fmt(d)}`).addTo(resultLayer);
+        .bindPopup(`<b>${esc(name)}</b><br>${from}から ${fmt(d)}(直線)`).addTo(resultLayer);
       return { name, d, m };
     });
-    $("status").textContent = `${items.length}件見つかりました`;
+    $("status").textContent = `${items.length}件(${from}からの直線距離順)`;
     $("list").innerHTML = items.map((it, i) =>
       `<li data-i="${i}"><span class="dist">${fmt(it.d)}</span>${esc(it.name)}</li>`).join("");
     $("list").onclick = ev => {
       const li = ev.target.closest("li"); if (!li) return;
       const { m } = items[li.dataset.i];
-      map.setView(m.getLatLng(), Math.max(map.getZoom(), 16)); m.openPopup();
+      line?.remove();
+      line = L.polyline([center, m.getLatLng()], { color: "#c5221f", dashArray: "8 6", weight: 4, opacity: 0.9 }).addTo(map);
+      map.fitBounds(line.getBounds(), { padding: [60, 60], maxZoom: 17 }); m.openPopup();
     };
     showList(items.length > 0);
   } catch (e) {
