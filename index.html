@@ -130,7 +130,7 @@ $("radius").addEventListener("input", () => {
 
 map.on("click", e => { setCenter(e.latlng, false); centerIsGps = false; $("status").textContent = "地図上の地点を中心に設定しました"; });
 
-$("locate").addEventListener("click", () => {
+function locate() {
   $("status").className = ""; $("status").textContent = "現在地を取得中...";
   navigator.geolocation.getCurrentPosition(
     pos => {
@@ -144,7 +144,9 @@ $("locate").addEventListener("click", () => {
         : "現在地を取得できませんでした。地図をクリックして中心を指定できます";
     },
     { enableHighAccuracy: true, timeout: 15000 });
-});
+}
+$("locate").addEventListener("click", locate);
+locate();  // 起動時に現在地を表示
 
 // 混雑(429/5xx)や接続失敗のときは、別のサーバーに切り替えて再試行する
 const ENDPOINTS = [
