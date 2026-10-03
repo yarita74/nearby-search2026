@@ -6,72 +6,87 @@
 <title>現在地から○km圏内検索</title>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
 <style>
-  :root { --bg:#fff; --fg:#1a1a1a; --muted:#666; --line:#ddd; --accent:#1a73e8; }
+  :root {
+    --bg:#f4f5f7; --surface:#ffffff; --fg:#1b1f24; --muted:#6a7380; --line:#e3e6ea;
+    --accent:#2563eb; --accent-soft:#e8efff; --green:#188038; --danger:#d93025;
+    --shadow:0 6px 24px rgba(15,23,42,.16);
+  }
   @media (prefers-color-scheme: dark) {
-    :root { --bg:#161616; --fg:#eee; --muted:#999; --line:#333; --accent:#8ab4f8; }
+    :root { --bg:#14161a; --surface:#1f2329; --fg:#eceff3; --muted:#9aa3af; --line:#2e343c;
+            --accent:#6ea0ff; --accent-soft:#25324d; --green:#2f9e57; --danger:#ff7b72; --shadow:0 6px 24px rgba(0,0,0,.5); }
   }
   * { box-sizing:border-box; }
-  body { margin:0; background:var(--bg); color:var(--fg); font:15px/1.5 -apple-system,"Hiragino Sans",sans-serif; }
-  #app { display:flex; flex-direction:column; height:100vh; }
-  #side { display:none; flex-direction:column; flex:0 0 35vh; min-height:0; border-top:1px solid var(--line); }
-  #app.open #side { display:flex; }
-  @media (min-width: 800px) {
-    #app { display:grid; grid-template-columns:1fr; grid-template-rows:auto 1fr; }
-    #app.open { grid-template-columns:1fr 360px; }
-    #panel { grid-column:1 / -1; }
-    #map { grid-column:1; grid-row:2; min-height:0 !important; }
-    #side { grid-column:2; grid-row:2; border-top:0; border-left:1px solid var(--line); }
-  }
-  #panel { padding:12px 16px; border-bottom:1px solid var(--line); }
-  .row { display:flex; gap:8px; align-items:center; margin-top:8px; }
-  .row > * { flex:1; }
-  .row > label { flex:0 0 auto; color:var(--muted); font-size:13px; }
-  input, select, button { font:inherit; padding:8px; border:1px solid var(--line); border-radius:6px; background:var(--bg); color:var(--fg); }
-  input[type=range] { padding:0; }
-  button { background:var(--accent); color:#fff; border:0; cursor:pointer; }
-  button:disabled { opacity:.5; }
-  #map { flex:1; min-height:300px; }
-  #status { margin-top:8px; color:var(--muted); font-size:13px; }
-  #locate { background:#188038; }
-  #nearby { background:#e37400; }
-  .btns { flex-wrap:wrap; } .btns button { flex:1 1 auto; white-space:nowrap; }
-  #credit { font-size:12px; color:var(--muted); }
+  html, body { height:100%; }
+  body { margin:0; background:var(--bg); color:var(--fg); font:15px/1.5 -apple-system,"Hiragino Sans","Noto Sans JP",sans-serif; }
+
+  #app { position:relative; display:flex; flex-direction:column; height:100vh; height:100dvh; }
+  #map { flex:1; min-height:0; z-index:0; }
+
+  /* 操作カード(地図の上に浮かせる) */
+  #panel { position:absolute; z-index:1200; top:12px; left:12px; right:12px; display:grid; gap:10px;
+           padding:14px; background:var(--surface); border-radius:16px; box-shadow:var(--shadow); }
+  @media (min-width: 800px) { #panel { right:auto; width:340px; } }
+  .title { display:flex; align-items:center; justify-content:space-between; font-weight:700; font-size:16px; }
+  .tr { display:flex; align-items:center; gap:10px; }
+  #ctrl { display:grid; gap:10px; }
+  .folded #ctrl { display:none; }
+  #fold { height:auto; padding:0; background:none; color:var(--accent); font-size:12.5px; }
+  .chip { font-weight:600; font-size:13px; color:var(--accent); background:var(--accent-soft); padding:2px 12px; border-radius:999px; }
+  input[type=range] { width:100%; margin:0; accent-color:var(--accent); }
+  input[type=search], select { width:100%; height:42px; padding:0 12px; font:inherit; color:var(--fg); background:var(--bg);
+                               border:1px solid var(--line); border-radius:10px; outline:none; }
+  input[type=search]:focus, select:focus { border-color:var(--accent); box-shadow:0 0 0 3px var(--accent-soft); }
+  select:disabled { opacity:.45; }
+  button { font:inherit; font-weight:600; height:42px; padding:0 14px; border:0; border-radius:10px; cursor:pointer; white-space:nowrap; }
+  button:disabled { opacity:.5; cursor:default; }
+  #nearby { background:var(--accent); color:#fff; }
+  .btns2 { display:grid; grid-template-columns:1fr 1fr; gap:8px; }
+  #search { background:transparent; color:var(--accent); border:1.5px solid var(--accent); }
+  #locate { background:var(--green); color:#fff; }
+  .meta { display:flex; align-items:center; justify-content:space-between; gap:8px; min-height:20px; font-size:12.5px; color:var(--muted); }
+  #toggle { display:none; height:auto; padding:0; background:none; color:var(--accent); font-size:12.5px; }
+  #credit { font-size:12px; color:var(--muted); } #credit:empty { display:none; }
   #credit a { color:var(--accent); }
-  select:disabled { opacity:.5; }
-  #toggle { display:none; flex:0 0 auto; background:transparent; color:var(--accent); border:1px solid var(--accent); }
-  .err { color:#d93025; }
-  #list { list-style:none; margin:0; padding:0 16px 16px; overflow:auto; flex:1; }
-  #list li { border-top:1px solid var(--line); padding:8px 0; cursor:pointer; }
-  #list li small { color:var(--muted); }
-  .dist { float:right; font-variant-numeric:tabular-nums; }
+  .err { color:var(--danger); }
+
+  /* 検索結果 */
+  #side { display:none; flex:0 0 40vh; min-height:0; overflow:auto; background:var(--surface); border-top:1px solid var(--line); z-index:1; }
+  #app.open #side { display:block; }
+  @media (min-width: 800px) {
+    #app { flex-direction:row; }
+    #side { flex:0 0 380px; border-top:0; border-left:1px solid var(--line); }
+  }
+  #list { list-style:none; margin:0; padding:0; }
+  #list li { display:grid; grid-template-columns:1fr auto; column-gap:12px; align-items:center; padding:12px 16px;
+             border-bottom:1px solid var(--line); cursor:pointer; }
+  #list li:hover { background:var(--accent-soft); }
+  .nm { font-weight:600; line-height:1.35; }
+  .ad { grid-column:1; font-size:12.5px; color:var(--muted); line-height:1.35; margin-top:2px; }
+  .dist { grid-column:2; grid-row:1 / span 2; font-size:13px; font-weight:600; color:var(--accent); background:var(--accent-soft);
+          padding:3px 10px; border-radius:999px; font-variant-numeric:tabular-nums; white-space:nowrap; }
+  .leaflet-popup-content { font:13px/1.5 -apple-system,"Hiragino Sans",sans-serif; }
 </style>
 </head>
 <body>
 <div id="app">
+  <div id="map"></div>
   <div id="panel">
-    <div class="row">
-      <label for="radius">半径 <b id="rv">1</b> km</label>
-      <input id="radius" type="range" min="0.1" max="20" step="0.1" value="1">
-    </div>
-    <div class="row">
-      <input id="kw" type="search" placeholder="キーワード(店名・施設名など。空欄なら種類のみ)">
-    </div>
-    <div class="row">
+    <div class="title"><span>近所を検索</span>
+      <span class="tr"><span class="chip">半径 <b id="rv">1</b> km</span><button id="fold">条件を閉じる ▲</button></span></div>
+    <input id="radius" type="range" min="0.1" max="20" step="0.1" value="1" aria-label="半径(km)">
+    <div id="ctrl">
+      <input id="kw" type="search" placeholder="店名・施設名で探す(空欄なら種類のみ)">
       <select id="type"></select>
-    </div>
-    <div class="row btns">
       <button id="nearby">近所の検索</button>
-      <button id="search">この円内を検索</button>
-      <button id="locate">現在地へ</button>
-      <button id="toggle">一覧を閉じる</button>
+      <div class="btns2">
+        <button id="search">この円内を検索</button>
+        <button id="locate">現在地へ</button>
+      </div>
     </div>
-    <div id="status">「現在地へ」を押すか、地図をクリックして中心を指定してください</div>
+    <div class="meta"><span id="status">「現在地へ」を押すか、地図をクリックして中心を指定してください</span><button id="toggle">一覧を閉じる</button></div>
     <div id="credit"></div>
   </div>
-  <div id="map"></div>
-  <div id="side">
-    <ul id="list"></ul>
-  </div>
+  <div id="side"><ul id="list"></ul></div>
 </div>
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
@@ -103,7 +118,8 @@ function haversine(lat1, lon1, lat2, lon2) {
   return 2 * R * Math.asin(Math.sqrt(a));
 }
 
-const map = L.map("map").setView([35.681, 139.767], 13); // 初期表示: 東京駅
+const map = L.map("map", { zoomControl: false }).setView([35.681, 139.767], 13); // 初期表示: 東京駅
+L.control.zoom({ position: "bottomright" }).addTo(map);
 L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
   maxZoom: 19,
   attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
@@ -112,6 +128,14 @@ L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
 let center = null, centerIsGps = false, centerMarker = null, circle = null, line = null;
 const resultLayer = L.layerGroup().addTo(map);
 const radiusM = () => parseFloat($("radius").value) * 1000;
+
+// 操作カードの条件部分を畳める(スマホでは検索後に自動で畳んで、地図を広く見せる)
+function fold(f, refit = false) {
+  $("panel").classList.toggle("folded", f);
+  $("fold").textContent = f ? "条件を開く ▼" : "条件を閉じる ▲";
+  setTimeout(() => { map.invalidateSize(); if (refit && circle) map.fitBounds(circle.getBounds()); }, 0);
+}
+$("fold").addEventListener("click", () => fold(!$("panel").classList.contains("folded")));
 
 // 検索結果の一覧: 検索後に表示、ボタンで開閉
 function showList(open) {
@@ -184,7 +208,28 @@ async function searchOpenPoi(kw, lat, lng, r, limit = 200) {
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   const { results } = await res.json();
   return results.map(x => ({ name: x.name || "(名称なし)", addr: x.address || [x.prefecture, x.city].filter(Boolean).join(""),
-                             la: x.lat, lo: x.lng }));
+                             la: x.lat, lo: x.lng, cat: x.category }));
+}
+
+// 種類だけの検索をOpenPOIで行うための対応表(OpenPOIには種類での絞り込みがないため、
+// 種類ごとの検索語で探し、名前または category に合うものだけ残す)
+const POI_TYPES = {
+  "カフェ":   { q: "カフェ コーヒー 珈琲 喫茶", cats: ["cafe"], re: /カフェ|cafe|coffee|コーヒー|珈琲|喫茶/i },
+  "レストラン": { q: "", cats: ["restaurant", "bar_izakaya"], re: /レストラン|食堂|ラーメン|寿司|焼肉|居酒屋|定食/ },
+  "コンビニ": { q: "コンビニ ローソン セブン-イレブン セブンイレブン ファミリーマート ミニストップ", cats: ["convenience_store"], re: /コンビニ|ローソン|セブン|ファミリーマート|ミニストップ|ファミマ/ },
+  "スーパー": { q: "スーパー マーケット イオン ライフ 西友 マルエツ", cats: ["grocery"], re: /スーパー(?!スポーツ)|マーケット|イオン(?!銀行)|ライフ|西友|マルエツ|成城石井/ },
+  "薬局":     { q: "薬局 ドラッグ 調剤 ファーマシー", cats: [], re: /薬局|ドラッグ|調剤|ファーマ|薬店/ },
+  "病院":     { q: "病院 クリニック 医院 診療所", cats: [], re: /病院|クリニック|医院|診療所/ },
+  "ガソリンスタンド": { q: "ガソリンスタンド 給油所 ENEOS 出光 コスモ", cats: [], re: /ガソリン|給油|ENEOS|エネオス|出光(?!興産)|コスモ石油|昭和シェル/i },
+  "駅":       null,  // OpenPOIは駅の収録が少ないため、OSMで探す
+  "駐車場":   { q: "駐車場 パーキング", cats: ["parking"], re: /駐車場|パーキング|parking/i },
+  "ATM":      { q: "ATM 銀行 ゆうちょ 信用金庫", cats: [], re: /ATM|銀行|ゆうちょ|信用金庫|郵便局/i },
+};
+async function searchOpenPoiType(type, lat, lng, r) {
+  const t = POI_TYPES[type];
+  if (!t) throw new Error("OpenPOI非対応の種類");
+  const rows = await searchOpenPoi(t.q, lat, lng, r, 200);
+  return rows.filter(x => t.cats.includes(x.cat) || t.re.test(x.name));
 }
 
 // OSM(Overpass)。tag は種類、kw は名前の絞り込み
@@ -225,8 +270,17 @@ async function runSearch(nearby) {
         $("status").textContent = "OpenPOIが使えないため、OSMで検索中...";
         found = nearby ? await nearestOsm("", kw, lat, lng, NEARBY_N) : await searchOsm("", kw, lat, lng, r); used = "OSM";
       }
-    } else { found = nearby ? await nearestOsm(tag, "", lat, lng, NEARBY_N) : await searchOsm(tag, "", lat, lng, r); used = "OSM"; }
-    if (used === "OpenPOI") $("credit").innerHTML = '出典: <a href="https://openpoiapi.com/attribution.html" target="_blank" rel="noopener">OpenPOI API</a>';
+    } else {
+      try {
+        found = await searchOpenPoiType($("type").value, lat, lng, nearby ? 50000 : r); used = "OpenPOI";
+        if (!found.length) throw new Error("none");
+      } catch {
+        $("status").textContent = "OSMで検索中...";
+        found = nearby ? await nearestOsm(tag, "", lat, lng, NEARBY_N) : await searchOsm(tag, "", lat, lng, r); used = "OSM";
+      }
+    }
+    if (used === "OpenPOI") $("credit").innerHTML = '出典: <a href="https://openpoiapi.com/attribution.html" target="_blank" rel="noopener">OpenPOI API</a>'
+      + (kw ? "" : "<br>※種類は名前などから判定しているため、漏れがあります");
 
     let rows = found.map(x => ({ ...x, d: haversine(lat, lng, x.la, x.lo) })).sort((a, b) => a.d - b.d);
     if (nearby) {
@@ -240,13 +294,13 @@ async function runSearch(nearby) {
     const from = centerIsGps ? "現在地" : "指定地点";
     resultLayer.clearLayers();
     const items = rows.map(({ name, addr, la, lo, d }) => {
-      const m = L.circleMarker([la, lo], { radius: 6, color: "#d93025", fillOpacity: .8 })
+      const m = L.circleMarker([la, lo], { radius: 5, color: "#fff", weight: 1.5, fillColor: "#e5484d", fillOpacity: .95 })
         .bindPopup(`<b>${esc(name)}</b><br>${addr ? esc(addr) + "<br>" : ""}${from}から ${fmt(d)}(直線)`).addTo(resultLayer);
       return { name, addr, d, m };
     });
     $("status").textContent = `${nearby ? "近い順に" : ""}${items.length}件(${from}からの直線距離順・${used})`;
     $("list").innerHTML = items.map((it, i) =>
-      `<li data-i="${i}"><span class="dist">${fmt(it.d)}</span>${esc(it.name)}${it.addr ? `<br><small>${esc(it.addr)}</small>` : ""}</li>`).join("");
+      `<li data-i="${i}"><div class="nm">${esc(it.name)}</div>${it.addr ? `<div class="ad">${esc(it.addr)}</div>` : ""}<span class="dist">${fmt(it.d)}</span></li>`).join("");
     $("list").onclick = ev => {
       const li = ev.target.closest("li"); if (!li) return;
       const { m } = items[li.dataset.i];
@@ -255,6 +309,7 @@ async function runSearch(nearby) {
       map.fitBounds(line.getBounds(), { padding: [60, 60], maxZoom: 17 }); m.openPopup();
     };
     showList(items.length > 0);
+    if (items.length && matchMedia("(max-width: 799px)").matches) fold(true, true);
   } catch (e) {
     $("status").className = "err"; $("status").textContent = `エラー: ${e.message}`;
   } finally { btns.forEach(b => b.disabled = false); }
