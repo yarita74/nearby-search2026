@@ -33,6 +33,11 @@
   #map { flex:1; min-height:300px; }
   #status { margin-top:8px; color:var(--muted); font-size:13px; }
   #locate { background:#188038; }
+  #nearby { background:#e37400; }
+  .btns { flex-wrap:wrap; } .btns button { flex:1 1 auto; white-space:nowrap; }
+  #credit { font-size:12px; color:var(--muted); }
+  #credit a { color:var(--accent); }
+  select:disabled { opacity:.5; }
   #toggle { display:none; flex:0 0 auto; background:transparent; color:var(--accent); border:1px solid var(--accent); }
   .err { color:#d93025; }
   #list { list-style:none; margin:0; padding:0 16px 16px; overflow:auto; flex:1; }
@@ -53,11 +58,15 @@
     </div>
     <div class="row">
       <select id="type"></select>
+    </div>
+    <div class="row btns">
+      <button id="nearby">近所の検索</button>
       <button id="search">この円内を検索</button>
       <button id="locate">現在地へ</button>
       <button id="toggle">一覧を閉じる</button>
     </div>
     <div id="status">「現在地へ」を押すか、地図をクリックして中心を指定してください</div>
+    <div id="credit"></div>
   </div>
   <div id="map"></div>
   <div id="side">
@@ -168,36 +177,76 @@ async function queryOverpass(q) {
   throw new Error(`${lastErr.message}(全サーバーが混雑中。少し待って再試行してください)`);
 }
 
+// キーワードあり: OpenPOI API(全国の店名・施設名・住所)。失敗したらOSMで検索
+async function searchOpenPoi(kw, lat, lng, r, limit = 200) {
+  const url = `https://api.openpoiapi.com/v1/search?center=${lng},${lat}&radius=${r}&limit=${limit}&q=${encodeURIComponent(kw)}`;
+  const res = await fetch(url, { signal: AbortSignal.timeout(15000) });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const { results } = await res.json();
+  return results.map(x => ({ name: x.name || "(名称なし)", addr: x.address || [x.prefecture, x.city].filter(Boolean).join(""),
+                             la: x.lat, lo: x.lng }));
+}
+
+// OSM(Overpass)。tag は種類、kw は名前の絞り込み
+async function searchOsm(tag, kw, lat, lng, r) {
+  const re = kw.replace(/駅$/, "").replace(/[.*+?^${}()|[\]\\"]/g, ".");  // 正規表現の記号は任意の1文字に置換
+  const filter = (tag ? `[${tag}]` : "") + (re ? `["name"~"${re}",i]` : "");
+  const { elements } = await queryOverpass(`[out:json][timeout:25];nwr${filter}(around:${r},${lat},${lng});out center tags 200;`);
+  return elements.map(e => ({ name: e.tags?.name || e.tags?.["name:ja"] || "(名称なし)", addr: "",
+                              la: e.lat ?? e.center?.lat, lo: e.lon ?? e.center?.lon })).filter(x => x.la != null);
+}
+
+// 近所の検索: 半径を広げながら、近い順にN件そろうまで探す(OSM用)
+async function nearestOsm(tag, kw, lat, lng, n) {
+  let rows = [];
+  for (const r of [500, 1000, 2000, 5000, 10000, 20000]) {
+    rows = await searchOsm(tag, kw, lat, lng, r);
+    if (rows.length >= n) break;
+  }
+  return rows;
+}
+const NEARBY_N = 20;
+
+// キーワードを入れたら種類は使わない(OpenPOIは種類で絞れないため)
+$("kw").addEventListener("input", () => { $("type").disabled = $("kw").value.trim() !== ""; });
 $("kw").addEventListener("keydown", e => { if (e.key === "Enter") $("search").click(); });
-$("search").addEventListener("click", async () => {
+async function runSearch(nearby) {
   if (!center) { $("status").className = "err"; $("status").textContent = "先に中心を決めてください"; return; }
-  const btn = $("search"); btn.disabled = true;
-  $("status").className = ""; $("status").textContent = "検索中...";
+  const btns = ["search", "nearby"].map($); btns.forEach(b => b.disabled = true);
+  $("status").className = ""; $("status").textContent = "検索中..."; $("credit").innerHTML = "";
   const { lat, lng } = center, r = Math.round(radiusM());
-  const tag = TYPES[$("type").value];
-  const kw = $("kw").value.trim().replace(/駅$/, "").replace(/[.*+?^${}()|[\]\\"]/g, ".");  // 正規表現の記号は任意の1文字に置換
-  if (!tag && !kw) { $("status").className = "err"; $("status").textContent = "種類かキーワードを指定してください"; btn.disabled = false; return; }
-  const filter = (tag ? `[${tag}]` : "") + (kw ? `["name"~"${kw}",i]` : "");
-  const q = `[out:json][timeout:25];nwr${filter}(around:${r},${lat},${lng});out center tags 200;`;
+  const kw = $("kw").value.trim(), tag = TYPES[$("type").value];
+  if (!tag && !kw) { $("status").className = "err"; $("status").textContent = "種類かキーワードを指定してください"; btns.forEach(b => b.disabled = false); return; }
   try {
-    const { elements } = await queryOverpass(q);
+    let found, used;
+    if (kw) {
+      try { found = await searchOpenPoi(kw, lat, lng, nearby ? 50000 : r, nearby ? NEARBY_N : 200); used = "OpenPOI"; }
+      catch {
+        $("status").textContent = "OpenPOIが使えないため、OSMで検索中...";
+        found = nearby ? await nearestOsm("", kw, lat, lng, NEARBY_N) : await searchOsm("", kw, lat, lng, r); used = "OSM";
+      }
+    } else { found = nearby ? await nearestOsm(tag, "", lat, lng, NEARBY_N) : await searchOsm(tag, "", lat, lng, r); used = "OSM"; }
+    if (used === "OpenPOI") $("credit").innerHTML = '出典: <a href="https://openpoiapi.com/attribution.html" target="_blank" rel="noopener">OpenPOI API</a>';
 
-    const rows = elements.map(e => {
-      const la = e.lat ?? e.center?.lat, lo = e.lon ?? e.center?.lon;
-      return la == null ? null : { e, la, lo, d: haversine(lat, lng, la, lo) };
-    }).filter(Boolean).sort((a, b) => a.d - b.d);
-
+    let rows = found.map(x => ({ ...x, d: haversine(lat, lng, x.la, x.lo) })).sort((a, b) => a.d - b.d);
+    if (nearby) {
+      rows = rows.slice(0, NEARBY_N);
+      if (rows.length) {  // 円を、N件が収まる大きさに合わせる
+        const km = Math.min(20, Math.max(0.1, Math.ceil(rows[rows.length - 1].d / 100) / 10));
+        $("radius").value = km; $("rv").textContent = km;
+        circle.setRadius(km * 1000); map.fitBounds(circle.getBounds());
+      }
+    }
     const from = centerIsGps ? "現在地" : "指定地点";
     resultLayer.clearLayers();
-    const items = rows.map(({ e, la, lo, d }) => {
-      const name = e.tags?.name || e.tags?.["name:ja"] || "(名称なし)";
+    const items = rows.map(({ name, addr, la, lo, d }) => {
       const m = L.circleMarker([la, lo], { radius: 6, color: "#d93025", fillOpacity: .8 })
-        .bindPopup(`<b>${esc(name)}</b><br>${from}から ${fmt(d)}(直線)`).addTo(resultLayer);
-      return { name, d, m };
+        .bindPopup(`<b>${esc(name)}</b><br>${addr ? esc(addr) + "<br>" : ""}${from}から ${fmt(d)}(直線)`).addTo(resultLayer);
+      return { name, addr, d, m };
     });
-    $("status").textContent = `${items.length}件(${from}からの直線距離順)`;
+    $("status").textContent = `${nearby ? "近い順に" : ""}${items.length}件(${from}からの直線距離順・${used})`;
     $("list").innerHTML = items.map((it, i) =>
-      `<li data-i="${i}"><span class="dist">${fmt(it.d)}</span>${esc(it.name)}</li>`).join("");
+      `<li data-i="${i}"><span class="dist">${fmt(it.d)}</span>${esc(it.name)}${it.addr ? `<br><small>${esc(it.addr)}</small>` : ""}</li>`).join("");
     $("list").onclick = ev => {
       const li = ev.target.closest("li"); if (!li) return;
       const { m } = items[li.dataset.i];
@@ -208,8 +257,10 @@ $("search").addEventListener("click", async () => {
     showList(items.length > 0);
   } catch (e) {
     $("status").className = "err"; $("status").textContent = `エラー: ${e.message}`;
-  } finally { btn.disabled = false; }
-});
+  } finally { btns.forEach(b => b.disabled = false); }
+}
+$("search").addEventListener("click", () => runSearch(false));
+$("nearby").addEventListener("click", () => runSearch(true));
 </script>
 </body>
 </html>
